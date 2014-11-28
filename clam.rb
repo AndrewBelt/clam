@@ -3,9 +3,25 @@
 require 'shellwords'
 require 'readline'
 require 'fileutils'
+require 'socket' # for Socket::get_hostname
+
+class String
+	def start_sub!(search, replacement)
+		len = search.length
+		if self[0, len] == search
+			self[0, len] = replacement
+		end
+		self
+	end
+	
+	# Calculates the length not including ANSI escape codes
+	def length_escape
+		gsub(/\e\[[0-9;]*m/, '').length
+	end
+end
 
 
-module Plastic
+module Clam
 	BUILTINS = {
 		'cd' => lambda { |dir=nil|
 			dir ||= Dir.home
@@ -21,61 +37,67 @@ module Plastic
 	PROMPT_REPLACEMENTS = {
 		'\W' => lambda {
 			pwd = Dir.pwd
-			# TODO
-			# Make sure we're replacing from the beginning
-			pwd.sub(Dir.home, '~')
+			pwd.start_sub!(Dir.home, '~')
+			pwd
 		},
+		'\u' => lambda {ENV['USER'] || ''},
+		'\h' => lambda {Socket.gethostname},
 	}
 	
-	def load_config
+	def self.load_config
 		config_path = Dir.join(Dir.home, '.config/plastic/config')
 		if Dir.exists?(config_path)
 			file = File.open(config_path, 'r')
 		else
-			# FileUtils.mkdir_p(Dir.base(config_path))
+			FileUtils.mkdir_p(File.dirname(config_path))
 			FileUtils.touch(config_path)
 		end
 	end
 	
 	# Read-eval-print-loop
-	def repl
+	def self.repl
 		input = ''
 		loop do
+			p = prompt()
+			p = ' ' * p.length_escape unless input.empty?
+			
 			begin
-				line = Readline.readline(prompt, true)
+				line = Readline.readline(p, true)
 			rescue Interrupt
 				puts
 				next
 			end
-				
+			
 			break unless line
 			input += line
 			
 			begin
 				args = Shellwords.shellsplit(input)
-				args.each {|a| a.sub!(/^~/, Dir.home)}
+				# BUG
+				# `echo '~'` prints "/home/username"
+				# should print "'~'"
+				args.each {|a| a.start_sub!('~', Dir.home)}
 			rescue ArgumentError
 				input += "\n"
 				next
 			end
 			
-			execute(args) if input != ''
+			execute(args) unless input.empty?
 			input = ''
 		end
 	end
 	
 	# Generates the prompt string
-	def prompt
+	def self.prompt
 		str = String.new(ENV['PROMPT'])
 		PROMPT_REPLACEMENTS.each {|k, v| str[k] &&= v.call}
-		# str = '... ' if @input != ''
 		str
 	end
 	
 	# Runs an array of arguments
 	# TODO
 	# Support piping and file redirection
-	def execute(args)
+	def self.execute(args)
 		cmd = args.shift
 		
 		method = $methods[cmd] || BUILTINS[cmd]
@@ -96,9 +118,8 @@ end
 
 
 
-ENV['PROMPT'] ||= "\x1b[1;34m\\W\x1b[0;32m=>\x1b[39m "
+ENV['PROMPT'] ||= "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m~>\e[39m "
 $methods = {}
 
-Plastic.load_config
-Plastic.repl
+Clam.repl
 puts
