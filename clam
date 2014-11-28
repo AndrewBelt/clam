@@ -22,17 +22,48 @@ end
 
 
 module Clam
-	BUILTINS = {
-		'cd' => lambda { |dir=nil|
+	class Shell < BasicObject
+		def cd(dir=nil)
 			dir ||= Dir.home
-			Dir.chdir(dir)
-		},
-		'exit' => lambda { |code=0| exit(code.to_i)},
-		'set' => lambda { |args|
-			key, value = args.split('=')
-			ENV[key] = value
-		},
-	}
+			::Dir.chdir(dir)
+		end
+		
+		def exit(code=0)
+			::Kernel.exit(code.to_i)
+		end
+		alias_method :quit, :exit
+		alias_method :logout, :exit
+		
+		def set(*args)
+			if args.empty?
+				$stderr.puts 'usage: set <name=value> ...'
+			end
+			args.each do |arg|
+				name, value = arg.split('=', 2)
+				ENV[key] = name
+			end
+		end
+		
+		def echo(*args)
+			s = args.join(' ')
+			$stdout.puts s unless s.empty?
+		end
+		
+		def exec(cmd, *args)
+			pid = ::Process.fork {
+				begin
+					::Kernel.exec(cmd, *args)
+				rescue => e
+					$stderr.puts e.message
+				end
+			}
+			::Process.wait(pid)
+		end
+		
+		def method_missing(sym, *args)
+			exec(sym.to_s, *args)
+		end
+	end
 	
 	PROMPT_REPLACEMENTS = {
 		'\W' => lambda {
@@ -44,13 +75,16 @@ module Clam
 		'\h' => lambda {Socket.gethostname},
 	}
 	
-	@@methods = {}
+	@@shell = Shell.new
 	
 	def self.load_config
-		config_path = Dir.join(Dir.home, '.config/plastic/config')
-		if Dir.exists?(config_path)
-			file = File.open(config_path, 'r')
+		config_path = File.join(Dir.home, '.config/clam/config.rb')
+		if File.exists?(config_path)
+			# This is possibly the most evil Ruby I've ever seen (or written)
+			config_source = File.read(config_path)
+			@@shell.instance_eval(config_source, config_path)
 		else
+			# Create the config directory (if needed) and file
 			FileUtils.mkdir_p(File.dirname(config_path))
 			FileUtils.touch(config_path)
 		end
@@ -118,30 +152,15 @@ module Clam
 		cmd = args.shift
 		
 		# Skip comments
-		return if cmd[0] == '#'
+		return if cmd.start_with?('#')
 		
-		method = @@methods[cmd] || BUILTINS[cmd]
-		if method
-			method.call(*args)
-		else
-			pid = fork do
-				begin
-					exec(cmd, *args)
-				rescue => e
-					$stderr.puts e.message
-				end
-			end
-			Process.wait(pid)
-		end
+		@@shell.__send__(cmd, *args)
 	end
 end
 
 
 
-ENV['PROMPT'] ||= "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m~>\e[39m "
+ENV['PROMPT'] ||= "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m =>\e[39m "
 
-if ARGV[0]
-	Clam.run(ARGV[0])
-else
-	Clam.repl
-end
+Clam.load_config
+Clam.repl
