@@ -44,6 +44,8 @@ module Clam
 		'\h' => lambda {Socket.gethostname},
 	}
 	
+	@@methods = {}
+	
 	def self.load_config
 		config_path = Dir.join(Dir.home, '.config/plastic/config')
 		if Dir.exists?(config_path)
@@ -54,21 +56,35 @@ module Clam
 		end
 	end
 	
+	# Runs a clam script
+	def self.run(filename)
+		file = File.open(filename)
+		while line = file.gets
+			line.strip!
+			args = Shellwords.shellsplit(line)
+			execute(args) unless args.empty?
+		end
+	end
+	
 	# Read-eval-print-loop
 	def self.repl
 		input = ''
 		loop do
+			# Prepare the prompt string
 			p = prompt()
 			p = ' ' * p.length_escape unless input.empty?
 			
+			# Read the input line
 			begin
 				line = Readline.readline(p, true)
 			rescue Interrupt
-				puts
+				$stdout.puts
 				next
 			end
 			
+			# Process the line
 			break unless line
+			line.strip!
 			input += line
 			
 			begin
@@ -82,9 +98,10 @@ module Clam
 				next
 			end
 			
-			execute(args) unless input.empty?
+			execute(args) unless args.empty?
 			input = ''
 		end
+		$stdout.puts
 	end
 	
 	# Generates the prompt string
@@ -100,7 +117,10 @@ module Clam
 	def self.execute(args)
 		cmd = args.shift
 		
-		method = $methods[cmd] || BUILTINS[cmd]
+		# Skip comments
+		return if cmd[0] == '#'
+		
+		method = @@methods[cmd] || BUILTINS[cmd]
 		if method
 			method.call(*args)
 		else
@@ -119,7 +139,9 @@ end
 
 
 ENV['PROMPT'] ||= "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m~>\e[39m "
-$methods = {}
 
-Clam.repl
-puts
+if ARGV[0]
+	Clam.run(ARGV[0])
+else
+	Clam.repl
+end
