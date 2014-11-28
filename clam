@@ -22,49 +22,6 @@ end
 
 
 module Clam
-	class Shell < BasicObject
-		def cd(dir=nil)
-			dir ||= Dir.home
-			::Dir.chdir(dir)
-		end
-		
-		def exit(code=0)
-			::Kernel.exit(code.to_i)
-		end
-		alias_method :quit, :exit
-		alias_method :logout, :exit
-		
-		def set(*args)
-			if args.empty?
-				$stderr.puts 'usage: set <name=value> ...'
-			end
-			args.each do |arg|
-				name, value = arg.split('=', 2)
-				ENV[key] = name
-			end
-		end
-		
-		def echo(*args)
-			s = args.join(' ')
-			$stdout.puts s unless s.empty?
-		end
-		
-		def exec(cmd, *args)
-			pid = ::Process.fork {
-				begin
-					::Kernel.exec(cmd, *args)
-				rescue => e
-					$stderr.puts e.message
-				end
-			}
-			::Process.wait(pid)
-		end
-		
-		def method_missing(sym, *args)
-			exec(sym.to_s, *args)
-		end
-	end
-	
 	PROMPT_REPLACEMENTS = {
 		'\W' => lambda {
 			pwd = Dir.pwd
@@ -75,7 +32,95 @@ module Clam
 		'\h' => lambda {Socket.gethostname},
 	}
 	
+	
+	class Shell < BasicObject
+		def initialize
+			@subs = []
+		end
+		
+		# Adds a pattern (String, Regex, or Symbol) and replacement (String) to the replacement list
+		# If pattern is a Symbol, it will only match the first word
+		def sub(pattern, replacement)
+			if pattern.is_a?(::Symbol)
+				pattern = /^#{pattern.to_s}\b/
+			end
+			@subs << [pattern, replacement]
+		end
+		
+		# Changes working directory
+		# If no argument is given, will change to your home directory
+		def cd(dir=nil)
+			dir ||= Dir.home
+			::Dir.chdir(dir)
+		end
+		
+		# Exits the shell with an optional error code
+		def exit(code=0)
+			::Kernel.exit(code.to_i)
+		end
+		alias_method :quit, :exit
+		alias_method :logout, :exit
+		
+		# Sets environment variables
+		def set(*args)
+			if args.empty?
+				$stderr.puts 'usage: set <name=value> ...'
+			end
+			args.each do |arg|
+				name, value = arg.split('=', 2)
+				::ENV[name] = value
+			end
+		end
+		
+		def echo(*args)
+			s = args.join(' ')
+			$stdout.puts s unless s.empty?
+		end
+		
+		# Can be overwritten to add custom behavior to the prompt string
+		# By default, returns the environment's PROMPT variable with
+		# certain patterns replaced
+		def prompt
+			str = ::ENV['PROMPT'].dup
+			::Clam::PROMPT_REPLACEMENTS.each {|k, v| str[k] &&= v.call}
+			str
+		end
+		
+		# Parses and runs a line of shell code
+		# Ruby scripts can conveniently drop into "shell mode" with
+		# eval '...'
+		def eval(line='')
+			line = line.strip
+			
+			# Run all the sub replacements
+			@subs.each do |sub|
+				line.gsub!(sub[0], sub[1])
+			end
+			
+			cmd, *args = ::Shellwords.shellsplit(line)
+			return if !cmd or cmd.start_with?('#')
+			
+			# BUG
+			# `echo '~'` prints "/home/username"
+			# should print "'~'"
+			args.each {|a| a.start_sub!('~', ::Dir.home)}
+			
+			__send__(cmd, *args)
+		end
+		
+		def exec(cmd, *args)
+			pid = ::Process.spawn(cmd, *args)
+			::Process.wait(pid)
+		end
+		
+		def method_missing(sym, *args)
+			exec(sym.to_s, *args)
+		end
+	end
+	
+	
 	@@shell = Shell.new
+	
 	
 	def self.load_config
 		config_path = File.join(Dir.home, '.config/clam/config.rb')
@@ -94,9 +139,7 @@ module Clam
 	def self.run(filename)
 		file = File.open(filename)
 		while line = file.gets
-			line.strip!
-			args = Shellwords.shellsplit(line)
-			execute(args) unless args.empty?
+			@@shell.eval(line)
 		end
 	end
 	
@@ -105,7 +148,7 @@ module Clam
 		input = ''
 		loop do
 			# Prepare the prompt string
-			p = prompt()
+			p = @@shell.prompt
 			p = ' ' * p.length_escape unless input.empty?
 			
 			# Read the input line
@@ -118,49 +161,32 @@ module Clam
 			
 			# Process the line
 			break unless line
-			line.strip!
 			input += line
 			
 			begin
-				args = Shellwords.shellsplit(input)
-				# BUG
-				# `echo '~'` prints "/home/username"
-				# should print "'~'"
-				args.each {|a| a.start_sub!('~', Dir.home)}
+				Shellwords.shellsplit(input)
 			rescue ArgumentError
 				input += "\n"
 				next
 			end
 			
-			execute(args) unless args.empty?
+			begin
+				@@shell.eval(input)
+			rescue => e
+				$stderr.puts e.message
+			end
 			input = ''
 		end
 		$stdout.puts
 	end
-	
-	# Generates the prompt string
-	def self.prompt
-		str = String.new(ENV['PROMPT'])
-		PROMPT_REPLACEMENTS.each {|k, v| str[k] &&= v.call}
-		str
-	end
-	
-	# Runs an array of arguments
-	# TODO
-	# Support piping and file redirection
-	def self.execute(args)
-		cmd = args.shift
-		
-		# Skip comments
-		return if cmd.start_with?('#')
-		
-		@@shell.__send__(cmd, *args)
-	end
 end
-
 
 
 ENV['PROMPT'] ||= "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m =>\e[39m "
 
 Clam.load_config
-Clam.repl
+if ARGV[0]
+	Clam.run(ARGV[0])
+else
+	Clam.repl
+end
