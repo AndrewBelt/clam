@@ -2,9 +2,10 @@
 
 require 'shellwords'
 require 'readline'
+require 'fileutils'
 
 
-class Shell
+module Plastic
 	BUILTINS = {
 		'cd' => lambda { |dir=nil|
 			dir ||= Dir.home
@@ -26,12 +27,19 @@ class Shell
 		},
 	}
 	
-	def initialize
-		@input = ''
-		@methods = {}
+	def load_config
+		config_path = Dir.join(Dir.home, '.config/plastic/config')
+		if Dir.exists?(config_path)
+			file = File.open(config_path, 'r')
+		else
+			# FileUtils.mkdir_p(Dir.base(config_path))
+			FileUtils.touch(config_path)
+		end
 	end
 	
-	def run
+	# Read-eval-print-loop
+	def repl
+		input = ''
 		loop do
 			begin
 				line = Readline.readline(prompt, true)
@@ -41,18 +49,18 @@ class Shell
 			end
 				
 			break unless line
-			@input += line
+			input += line
 			
 			begin
-				args = Shellwords.shellsplit(@input)
+				args = Shellwords.shellsplit(input)
 				args.each {|a| a.sub!(/^~/, Dir.home)}
 			rescue ArgumentError
-				@input += "\n"
+				input += "\n"
 				next
 			end
 			
-			execute(args) if @input != ''
-			@input = ''
+			execute(args) if input != ''
+			input = ''
 		end
 	end
 	
@@ -60,7 +68,7 @@ class Shell
 	def prompt
 		str = String.new(ENV['PROMPT'])
 		PROMPT_REPLACEMENTS.each {|k, v| str[k] &&= v.call}
-		str = '... ' if @input != ''
+		# str = '... ' if @input != ''
 		str
 	end
 	
@@ -70,7 +78,7 @@ class Shell
 	def execute(args)
 		cmd = args.shift
 		
-		method = @methods[cmd] || BUILTINS[cmd]
+		method = $methods[cmd] || BUILTINS[cmd]
 		if method
 			method.call(*args)
 		else
@@ -89,7 +97,8 @@ end
 
 
 ENV['PROMPT'] ||= "\x1b[1;34m\\W\x1b[0;32m=>\x1b[39m "
+$methods = {}
 
-shell = Shell.new
-shell.run
+Plastic.load_config
+Plastic.repl
 puts
