@@ -2,7 +2,7 @@
 
 require 'shellwords'
 require 'readline'
-require 'fileutils'
+require 'fileutils' # for FileUtils.mkdir_p
 require 'socket' # for Socket::get_hostname
 
 class String
@@ -179,8 +179,7 @@ module Clam
       begin
         @@shell.eval(input)
       rescue => e
-        $stderr.write 'error: '
-        $stderr.puts e.message
+        $stderr.puts "error: #{e.message}"
       end
       input = ''
     end
@@ -188,15 +187,38 @@ module Clam
   end
   
   def self.test
+    state = `stty -g`
+    `stty raw -echo isig`
+    
+    line = ''
+    loop do
+      c = $stdin.getc
+      case c
+      when "\x7f"
+        line = line[0...-1]
+        "\b \b"
+      when "\r"
+        line += "\n"
+        "\r\n"
+      else
+        line += c
+        c
+      end
+      $stdout.flush
+    end
     # p @@shell.exec('echo', 'hi')
     # p @@shell.eval('echo hi')
     # state = @@shell.eval('stty -g')
     # @@shell.eval('stty -raw echo')
+  ensure
+    p line
+    `stty #{state}`
   end
 end
 
 # Default environment
 ENV['PROMPT'] = "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m (>\e[39m "
+
 
 Clam.load_config
 if ARGV[0]
