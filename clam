@@ -6,187 +6,201 @@ require 'fileutils'
 require 'socket' # for Socket::get_hostname
 
 class String
-	def start_sub!(search, replacement)
-		len = search.length
-		if self[0, len] == search
-			self[0, len] = replacement
-		end
-		self
-	end
-	
-	# Calculates the length not including ANSI escape codes
-	def length_escape
-		gsub(/\e\[[0-9;]*m/, '').length
-	end
+  def start_sub!(search, replacement)
+    len = search.length
+    if self[0, len] == search
+      self[0, len] = replacement
+    end
+    self
+  end
+  
+  # Calculates the length not including ANSI escape codes
+  def length_escape
+    gsub(/\e\[[0-9;]*m/, '').length
+  end
 end
 
 
 module Clam
-	PROMPT_REPLACEMENTS = {
-		'\W' => lambda {
-			pwd = Dir.pwd
-			pwd.start_sub!(Dir.home, '~')
-			pwd
-		},
-		'\u' => lambda {ENV['USER'] || ''},
-		'\h' => lambda {Socket.gethostname},
-	}
-	
-	
-	class Shell < BasicObject
-		def initialize
-			@subs = []
-		end
-		
-		# Adds a pattern (String, Regex, or Symbol) and replacement (String) to the replacement list
-		# If pattern is a Symbol, it will only match the first word
-		def sub(pattern, replacement)
-			if pattern.is_a?(::Symbol)
-				pattern = /^#{pattern.to_s}\b/
-			end
-			@subs << [pattern, replacement]
-		end
-		
-		# Changes working directory
-		# If no argument is given, will change to your home directory
-		def cd(dir=nil)
-			dir ||= Dir.home
-			::Dir.chdir(dir)
-		end
-		
-		# Exits the shell with an optional error code
-		def exit(code=0)
-			::Kernel.exit(code.to_i)
-		end
-		alias_method :quit, :exit
-		alias_method :logout, :exit
-		
-		# Sets environment variables
-		def set(*args)
-			if args.empty?
-				$stderr.puts 'usage: set <name=value> ...'
-			end
-			args.each do |arg|
-				name, value = arg.split('=', 2)
-				::ENV[name] = value
-			end
-		end
-		
-		def echo(*args)
-			s = args.join(' ')
-			$stdout.puts s unless s.empty?
-		end
-		
-		# Can be overwritten to add custom behavior to the prompt string
-		# By default, returns the environment's PROMPT variable with
-		# certain patterns replaced
-		def prompt
-			str = ::ENV['PROMPT'].dup
-			::Clam::PROMPT_REPLACEMENTS.each {|k, v| str[k] &&= v.call}
-			str
-		end
-		
-		# Parses and runs a line of shell code
-		# Ruby scripts can conveniently drop into "shell mode" with
-		# eval '...'
-		def eval(line='')
-			line = line.strip
-			
-			# Run all the sub replacements
-			@subs.each do |sub|
-				line.gsub!(sub[0], sub[1])
-			end
-			
-			cmd, *args = ::Shellwords.shellsplit(line)
-			return if !cmd or cmd.start_with?('#')
-			
-			# BUG
-			# `echo '~'` prints "/home/username"
-			# should print "'~'"
-			args.each {|a| a.start_sub!('~', ::Dir.home)}
-			
-			__send__(cmd, *args)
-		end
-		
-		def exec(cmd, *args)
-			pid = ::Process.spawn(cmd, *args)
-			::Process.wait(pid)
-		end
-		
-		def method_missing(sym, *args)
-			exec(sym.to_s, *args)
-		end
-	end
-	
-	
-	@@shell = Shell.new
-	
-	
-	def self.load_config
-		config_path = File.join(Dir.home, '.config/clam/config.rb')
-		if File.exists?(config_path)
-			# This is possibly the most evil Ruby I've ever seen (or written)
-			config_source = File.read(config_path)
-			@@shell.instance_eval(config_source, config_path)
-		else
-			# Create the config directory (if needed) and file
-			FileUtils.mkdir_p(File.dirname(config_path))
-			FileUtils.touch(config_path)
-		end
-	end
-	
-	# Runs a clam script
-	def self.run(filename)
-		file = File.open(filename)
-		while line = file.gets
-			@@shell.eval(line)
-		end
-	end
-	
-	# Read-eval-print-loop
-	def self.repl
-		input = ''
-		loop do
-			# Prepare the prompt string
-			p = @@shell.prompt
-			p = ' ' * p.length_escape unless input.empty?
-			
-			# Read the input line
-			begin
-				line = Readline.readline(p, true)
-			rescue Interrupt
-				$stdout.puts
-				next
-			end
-			
-			# Process the line
-			break unless line
-			input += line
-			
-			begin
-				Shellwords.shellsplit(input)
-			rescue ArgumentError
-				input += "\n"
-				next
-			end
-			
-			begin
-				@@shell.eval(input)
-			rescue => e
-				$stderr.puts e.message
-			end
-			input = ''
-		end
-		$stdout.puts
-	end
+  PROMPT_REPLACEMENTS = {
+    '\W' => lambda {
+      pwd = Dir.pwd
+      pwd.start_sub!(Dir.home, '~')
+      pwd
+    },
+    '\u' => lambda {ENV['USER'] || ''},
+    '\h' => lambda {Socket.gethostname},
+  }
+  
+  
+  class Shell
+    def initialize
+      @subs = []
+    end
+    
+    # Adds a pattern (String, Regex, or Symbol) and replacement (String) to the replacement list
+    # If pattern is a Symbol, it will only match the first word
+    def sub(pattern, replacement)
+      if pattern.is_a?(::Symbol)
+        # BUG
+        # Shouldn't replace :gdb in 'gdb-as', but it does
+        pattern = /^#{pattern.to_s}\b/
+      end
+      @subs << [pattern, replacement]
+    end
+    
+    # Changes working directory
+    # If no argument is given, will change to your home directory
+    def cd(dir=nil)
+      dir ||= Dir.home
+      Dir.chdir(dir)
+    end
+    
+    # Exits the shell with an optional error code
+    def exit(code=0)
+      Kernel.exit(code.to_i)
+    end
+    alias_method :quit, :exit
+    alias_method :logout, :exit
+    
+    # Sets environment variables
+    def set(*args)
+      if args.empty?
+        $stderr.puts 'usage: set <name=value> ...'
+      end
+      args.each do |arg|
+        name, value = arg.split('=', 2)
+        ENV[name] = value
+      end
+    end
+    
+    def echo(*args)
+      s = args.join(' ')
+      $stdout.puts s unless s.empty?
+    end
+    
+    # Can be overwritten to add custom behavior to the prompt string
+    # By default, returns the environment's PROMPT variable with
+    # certain patterns replaced
+    def prompt
+      str = ENV['PROMPT'].dup
+      Clam::PROMPT_REPLACEMENTS.each {|k, v| str[k] &&= v.call}
+      str
+    end
+    
+    # Runs a Clam shell script
+    def run(filename)
+      # This is possibly the most evil Ruby I've written,
+      # except for the entire Shell "basic class" itself.
+      source = File.read(filename)
+      instance_eval(source, filename)
+    end
+    
+    # Parses and runs a line of shell code (from the REPL)
+    # Ruby scripts can conveniently drop into "shell mode" with
+    # eval '...'
+    def eval(line='')
+      # Run all the sub replacements
+      @subs.each do |sub|
+        line.gsub!(sub[0], sub[1])
+      end
+      
+      cmd, *args = Shellwords.shellsplit(line)
+      return if !cmd or cmd.start_with?('#')
+      
+      # BUG
+      # `echo '~'` prints "/home/username"
+      # should print "'~'"
+      args.each {|a| a.start_sub!('~', Dir.home)}
+      
+      begin
+        # Try to call owned method first
+        m = method(cmd)
+        raise NameError unless m.owner == self.class or m.owner == self.singleton_class
+        m.call(*args)
+      rescue NameError
+        # Otherwise execute the arguments
+        exec(cmd, *args)
+      end
+    end
+    
+    def exec(cmd, *args)
+      # Launch process with no shell
+      pid = Process.spawn([cmd, cmd], *args)
+      Process.wait(pid)
+    end
+  end
+  
+  
+  @@shell = Shell.new
+  
+  
+  def self.load_config
+    config_path = File.join(Dir.home, '.config/clam/config.rb')
+    unless File.exists?(config_path)
+      # Create the config directory (if needed) and file
+      FileUtils.mkdir_p(File.dirname(config_path))
+      FileUtils.touch(config_path)
+    end
+    @@shell.run(config_path)
+  end
+  
+  def self.run(filename)
+    @@shell.run(filename)
+  end
+  
+  # Read-eval-print-loop
+  def self.repl
+    input = ''
+    loop do
+      # Prepare the prompt string
+      p = @@shell.prompt
+      p = ' ' * p.length_escape unless input.empty?
+      
+      # Read the input line
+      begin
+        line = Readline.readline(p, true)
+      rescue Interrupt
+        $stdout.puts
+        next
+      end
+      
+      # Process the line
+      break unless line
+      input += line
+      
+      begin
+        Shellwords.shellsplit(input)
+      rescue ArgumentError
+        input += "\n"
+        next
+      end
+      
+      begin
+        @@shell.eval(input)
+      rescue => e
+        $stderr.write 'error: '
+        $stderr.puts e.message
+      end
+      input = ''
+    end
+    $stdout.puts
+  end
+  
+  def self.test
+    # p @@shell.exec('echo', 'hi')
+    # p @@shell.eval('echo hi')
+    # state = @@shell.eval('stty -g')
+    # @@shell.eval('stty -raw echo')
+  end
 end
 
-
-ENV['PROMPT'] ||= "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m =>\e[39m "
+# Default environment
+ENV['PROMPT'] = "\e[35m\\u@\\h \e[1;34m\\W\e[0;32m (>\e[39m "
 
 Clam.load_config
 if ARGV[0]
-	Clam.run(ARGV[0])
+  Clam.run(ARGV[0])
 else
-	Clam.repl
+  Clam.repl
 end
